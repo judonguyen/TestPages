@@ -34,8 +34,14 @@ function renderResult(data) {
         : ("on " + w.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " at " + w.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
     }
     const days = data.daysRemaining || 5;
+    let stepName = "";
+    if (data.steps && data.steps.length) {
+      const idx = (data.currentIdx >= 0) ? data.currentIdx : (data.steps.length - 1);
+      if (data.steps[idx]) stepName = data.steps[idx].name;
+    }
     html += '<div class="error-msg" style="margin-bottom:16px;line-height:1.5">' +
-      '⛔ You already checked this submission <strong>' + whenTxt + '</strong> — here&#39;s the latest update below.<br />' +
+      '⛔ You already checked this submission <strong>' + whenTxt + '</strong>.<br />' +
+      (stepName ? 'Last known step: <strong>' + esc(stepName) + '</strong> (shown below).<br />' : '') +
       'You can&#39;t check this number again for another <strong>' + days + ' day' + (days === 1 ? '' : 's') + '</strong>.<br />' +
       '🧘 Patience is the key to happiness.</div>';
   } else if (data.fetchedAt) {

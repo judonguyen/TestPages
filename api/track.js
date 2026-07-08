@@ -107,12 +107,24 @@ module.exports = async function handler(req, res) {
   // The key carries a 5-day TTL, so its presence means "checked within 5 days" —
   // if so, block it (no PSA call) and tell them how long to wait.
   const checkedKey = "palmetto:checked:" + sub;
+  const nowIso = new Date().toISOString();
   if (configured()) {
-    let prior = null;
-    try { prior = await cmd(["GET", checkedKey]); } catch (e) {}
-    if (prior) {
-      const elapsed = (Date.now() - Date.parse(prior)) / 86400000;
+    let priorRaw = null;
+    try { priorRaw = await cmd(["GET", checkedKey]); } catch (e) {}
+    if (priorRaw) {
+      let prior;
+      try { prior = JSON.parse(priorRaw); } catch (e) { prior = { checkedAt: priorRaw }; }
+      const checkedAt = prior.checkedAt || priorRaw;
+      const elapsed = (Date.now() - Date.parse(checkedAt)) / 86400000;
       const daysRemaining = Math.max(1, Math.ceil(5 - (isNaN(elapsed) ? 0 : elapsed)));
+      if (prior.result) {
+        // Show the saved status (their last step) alongside the already-checked banner.
+        return res.status(200).json(Object.assign({}, prior.result, {
+          ok: true, alreadyChecked: true, daysRemaining: daysRemaining,
+          fetchedAt: (prior.result.fetchedAt || checkedAt)
+        }));
+      }
+      // No saved status (the first check couldn't reach PSA) — message only.
       return res.status(200).json({
         ok: false, alreadyChecked: true, daysRemaining: daysRemaining,
         error: "Submission #" + sub + " has already been checked within the last 5 days. 🧘 Patience is the key to happiness — please try again in about " + daysRemaining + " day" + (daysRemaining === 1 ? "" : "s") + "."
@@ -127,7 +139,7 @@ module.exports = async function handler(req, res) {
   // Record this lookup now (5-day TTL) BEFORE calling PSA, so the same number
   // can't hit the PSA API again within 5 days — regardless of the outcome.
   if (configured()) {
-    try { await cmd(["SET", checkedKey, new Date().toISOString(), "EX", 5 * 24 * 3600]); } catch (e) {}
+    try { await cmd(["SET", checkedKey, JSON.stringify({ checkedAt: nowIso }), "EX", 5 * 24 * 3600]); } catch (e) {}
   }
 
   // NOTE: PSA has two endpoints — GetProgress expects an ORDER number, while
@@ -176,8 +188,14 @@ module.exports = async function handler(req, res) {
     problemOrder: !!d.problemOrder,
     steps: steps,
     certs: [],              // no cert list is available from the progress endpoint
-    fetchedAt: new Date().toISOString()
+    fetchedAt: nowIso
   };
+
+  // Store the status (the last step) with the 5-day record, so a repeat within
+  // the window shows exactly where the submission was.
+  if (configured()) {
+    try { await cmd(["SET", checkedKey, JSON.stringify({ checkedAt: nowIso, result: result }), "EX", 5 * 24 * 3600]); } catch (e) {}
+  }
 
   return res.status(200).json(result);
 };
