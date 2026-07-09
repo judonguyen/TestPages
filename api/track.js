@@ -111,33 +111,34 @@ module.exports = async function handler(req, res) {
   }
   if (!isAdmin) await logSubmission(sub);
 
-  // Check the database: has this submission been looked up in the last 5 days?
-  // The key carries a 5-day TTL, so its presence means "checked within 5 days" —
-  // if so, block it (no PSA call) and tell them how long to wait.
+  // CHECK THE DATABASE FIRST — before ever calling PSA — to see if this exact
+  // submission was already looked up in the last 24 hours. The record carries a
+  // 24-hour TTL, so its mere presence means "checked within 24h" → block (no PSA
+  // call), which is what saves PSA API calls.
   const checkedKey = "palmetto:checked:" + sub;
   const nowIso = new Date().toISOString();
-  const period = etPeriod();
+  const TTL_24H = 24 * 3600;
   if (configured()) {
     let priorRaw = null;
     try { priorRaw = await cmd(["GET", checkedKey]); } catch (e) {}
     if (priorRaw) {
       let prior;
       try { prior = JSON.parse(priorRaw); } catch (e) { prior = {}; }
-      if (prior.period === period) {   // already checked in the current day (resets 12 PM ET)
-        const checkedAt = prior.checkedAt || nowIso;
-        if (prior.result) {
-          // Show the saved status (their last step) + already-checked banner.
-          return res.status(200).json(Object.assign({}, prior.result, {
-            ok: true, alreadyChecked: true, lastCheckedAt: checkedAt,
-            fetchedAt: (prior.result.fetchedAt || checkedAt)
-          }));
-        }
-        // No saved status (the first check couldn't reach PSA) — message only.
-        return res.status(200).json({
-          ok: false, alreadyChecked: true, lastCheckedAt: checkedAt,
-          error: "Submission #" + sub + " has already been checked today. Lookups reset daily at 12:00 PM ET — 🧘 patience is the key to happiness."
-        });
+      const checkedAt = prior.checkedAt || nowIso;
+      const elapsedH = (Date.now() - Date.parse(checkedAt)) / 3600000;
+      const hoursRemaining = Math.max(1, Math.ceil(24 - (isNaN(elapsedH) ? 0 : elapsedH)));
+      if (prior.result) {
+        // Show the saved status (their last step) + already-checked banner.
+        return res.status(200).json(Object.assign({}, prior.result, {
+          ok: true, alreadyChecked: true, lastCheckedAt: checkedAt, hoursRemaining: hoursRemaining,
+          fetchedAt: (prior.result.fetchedAt || checkedAt)
+        }));
       }
+      // No saved status (the first check couldn't reach PSA) — message only.
+      return res.status(200).json({
+        ok: false, alreadyChecked: true, lastCheckedAt: checkedAt, hoursRemaining: hoursRemaining,
+        error: "Submission #" + sub + " has already been checked in the last 24 hours. You can check it again in about " + hoursRemaining + " hour" + (hoursRemaining === 1 ? "" : "s") + " — 🧘 patience is the key to happiness."
+      });
     }
   }
 
@@ -145,10 +146,10 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ ok: false, error: "Server is not configured with a PSA token." });
   }
 
-  // Record this lookup for today's period BEFORE calling PSA, so the same number
-  // can't hit the PSA API again until the next 12 PM ET reset — regardless of outcome.
+  // Record this lookup NOW (24-hour TTL) BEFORE calling PSA, so the same number
+  // can't hit the PSA API again within 24 hours — regardless of the outcome.
   if (configured()) {
-    try { await cmd(["SET", checkedKey, JSON.stringify({ period: period, checkedAt: nowIso }), "EX", 2 * 24 * 3600]); } catch (e) {}
+    try { await cmd(["SET", checkedKey, JSON.stringify({ checkedAt: nowIso }), "EX", TTL_24H]); } catch (e) {}
   }
 
   // NOTE: PSA has two endpoints — GetProgress expects an ORDER number, while
@@ -200,10 +201,10 @@ module.exports = async function handler(req, res) {
     fetchedAt: nowIso
   };
 
-  // Store the status (the last step) with today's record, so a repeat before the
-  // next 12 PM ET reset shows exactly where the submission was.
+  // Store the status (the last step) with the 24-hour record, so a repeat within
+  // 24 hours shows exactly where the submission was — without another PSA call.
   if (configured()) {
-    try { await cmd(["SET", checkedKey, JSON.stringify({ period: period, checkedAt: nowIso, result: result }), "EX", 2 * 24 * 3600]); } catch (e) {}
+    try { await cmd(["SET", checkedKey, JSON.stringify({ checkedAt: nowIso, result: result }), "EX", TTL_24H]); } catch (e) {}
   }
 
   return res.status(200).json(result);

@@ -44,14 +44,15 @@ function renderResult(data) {
       const idx = (data.currentIdx >= 0) ? data.currentIdx : (data.steps.length - 1);
       if (data.steps[idx]) stepName = data.steps[idx].name;
     }
+    const hrs = data.hoursRemaining || 24;
     html += '<div class="error-msg" style="margin-bottom:16px;line-height:1.5">' +
       '⛔ You already checked this submission <strong>' + esc(whenTxt) + '</strong>.<br />' +
       (stepName ? 'Last recorded step: <strong>' + esc(stepName) + '</strong> (shown below).<br />' : '') +
-      'Each submission can be checked once per day — this resets at <strong>12:00&nbsp;PM&nbsp;ET</strong>.<br />' +
+      'Each submission can be checked once every 24 hours — you can check again in about <strong>' + hrs + ' hour' + (hrs === 1 ? '' : 's') + '</strong>.<br />' +
       '🧘 Patience is the key to happiness.</div>';
   } else if (data.fetchedAt) {
     html += '<div class="muted-note" style="background:#f4f8fb;border:1px solid #dbe6ef;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px">' +
-      '✅ Status checked just now. Each submission can be checked once per day — resets at <strong>12:00&nbsp;PM&nbsp;ET</strong>. 🧘 Patience is the key to happiness.</div>';
+      '✅ Status checked just now. Each submission can be checked once every <strong>24 hours</strong>. 🧘 Patience is the key to happiness.</div>';
   }
 
   // Header
