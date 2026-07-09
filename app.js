@@ -14,6 +14,18 @@ function checkmarkSvg() {
   return '<svg class="checkmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 }
 
+// Format an ISO time as Eastern (e.g. "today at 2:15 PM ET" or "on Jul 8 at 2:15 PM ET").
+function fmtET(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "earlier";
+    const dateStr = d.toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+    const timeStr = d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+    const todayET = new Date().toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+    return (dateStr === todayET ? "today at " + timeStr : "on " + dateStr + " at " + timeStr) + " ET";
+  } catch (e) { return "earlier"; }
+}
+
 function renderResult(data) {
   const TOTAL = data.steps.length;
   // Show the step the order is currently ON (the in-progress step), not just
@@ -26,27 +38,20 @@ function renderResult(data) {
 
   // Repeat check: show that it was already checked, plus the wait + patience note.
   if (data.alreadyChecked) {
-    let whenTxt = "recently";
-    if (data.fetchedAt) {
-      const w = new Date(data.fetchedAt), now = new Date();
-      whenTxt = (w.toDateString() === now.toDateString())
-        ? ("today at " + w.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }))
-        : ("on " + w.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " at " + w.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
-    }
-    const days = data.daysRemaining || 5;
+    const whenTxt = fmtET(data.lastCheckedAt || data.fetchedAt);
     let stepName = "";
     if (data.steps && data.steps.length) {
       const idx = (data.currentIdx >= 0) ? data.currentIdx : (data.steps.length - 1);
       if (data.steps[idx]) stepName = data.steps[idx].name;
     }
     html += '<div class="error-msg" style="margin-bottom:16px;line-height:1.5">' +
-      '⛔ You already checked this submission <strong>' + whenTxt + '</strong>.<br />' +
-      (stepName ? 'Last known step: <strong>' + esc(stepName) + '</strong> (shown below).<br />' : '') +
-      'You can&#39;t check this number again for another <strong>' + days + ' day' + (days === 1 ? '' : 's') + '</strong>.<br />' +
+      '⛔ You already checked this submission <strong>' + esc(whenTxt) + '</strong>.<br />' +
+      (stepName ? 'Last recorded step: <strong>' + esc(stepName) + '</strong> (shown below).<br />' : '') +
+      'Each submission can be checked once per day — this resets at <strong>12:00&nbsp;PM&nbsp;ET</strong>.<br />' +
       '🧘 Patience is the key to happiness.</div>';
   } else if (data.fetchedAt) {
     html += '<div class="muted-note" style="background:#f4f8fb;border:1px solid #dbe6ef;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:13px">' +
-      '✅ Status checked just now. You can check this submission again in <strong>5 days</strong> — 🧘 patience is the key to happiness.</div>';
+      '✅ Status checked just now. Each submission can be checked once per day — resets at <strong>12:00&nbsp;PM&nbsp;ET</strong>. 🧘 Patience is the key to happiness.</div>';
   }
 
   // Header
@@ -247,9 +252,10 @@ function lookupsOpen() { const h = etHour(); return h >= 12 && h < 19; }
 
   if (!data || !data.ok) {
     const m = (data && data.error) || "Unknown error";
-    // "Already checked in the last 5 days" is an expected notice, not a failure.
+    // "Already checked today" is an expected notice, not a failure.
     if (data && data.alreadyChecked) {
-      result.innerHTML = '<div class="error-msg" style="line-height:1.55">⛔ ' + esc(m) + '</div>';
+      const extra = data.lastCheckedAt ? '<br />Last checked: <strong>' + esc(fmtET(data.lastCheckedAt)) + '</strong>.' : '';
+      result.innerHTML = '<div class="error-msg" style="line-height:1.55">⛔ ' + esc(m) + extra + '</div>';
     } else {
       result.innerHTML = '<div class="error-msg">Lookup failed: ' + esc(m) + '</div>';
     }

@@ -80,11 +80,19 @@ function lookupsOpen() {
   } catch (e) { return true; }  // if the timezone lookup fails, don't lock out
 }
 
-// Today's date in Eastern (YYYY-MM-DD). Used as the once-per-day key; resets at
-// midnight ET (safely outside the 12–7 PM lookup window).
-function etDate() {
-  try { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-  catch (e) { return new Date().toISOString().slice(0, 10); }
+// The current once-per-day period, resetting at 12:00 PM ET. Labeled by the date
+// of the noon-ET → noon-ET window it belongs to (before noon = previous day).
+function etPeriod() {
+  try {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hour12: false }).formatToParts(new Date());
+    const get = function (t) { return p.find(function (x) { return x.type === t; }).value; };
+    let y = +get("year"), m = +get("month"), d = +get("day"), h = (+get("hour")) % 24;
+    if (h < 12) {  // before noon ET → still the previous day's window
+      const dt = new Date(Date.UTC(y, m - 1, d) - 86400000);
+      y = dt.getUTCFullYear(); m = dt.getUTCMonth() + 1; d = dt.getUTCDate();
+    }
+    return y + "-" + ("0" + m).slice(-2) + "-" + ("0" + d).slice(-2);
+  } catch (e) { return new Date().toISOString().slice(0, 10); }
 }
 
 module.exports = async function handler(req, res) {
@@ -108,27 +116,28 @@ module.exports = async function handler(req, res) {
   // if so, block it (no PSA call) and tell them how long to wait.
   const checkedKey = "palmetto:checked:" + sub;
   const nowIso = new Date().toISOString();
+  const period = etPeriod();
   if (configured()) {
     let priorRaw = null;
     try { priorRaw = await cmd(["GET", checkedKey]); } catch (e) {}
     if (priorRaw) {
       let prior;
-      try { prior = JSON.parse(priorRaw); } catch (e) { prior = { checkedAt: priorRaw }; }
-      const checkedAt = prior.checkedAt || priorRaw;
-      const elapsed = (Date.now() - Date.parse(checkedAt)) / 86400000;
-      const daysRemaining = Math.max(1, Math.ceil(5 - (isNaN(elapsed) ? 0 : elapsed)));
-      if (prior.result) {
-        // Show the saved status (their last step) alongside the already-checked banner.
-        return res.status(200).json(Object.assign({}, prior.result, {
-          ok: true, alreadyChecked: true, daysRemaining: daysRemaining,
-          fetchedAt: (prior.result.fetchedAt || checkedAt)
-        }));
+      try { prior = JSON.parse(priorRaw); } catch (e) { prior = {}; }
+      if (prior.period === period) {   // already checked in the current day (resets 12 PM ET)
+        const checkedAt = prior.checkedAt || nowIso;
+        if (prior.result) {
+          // Show the saved status (their last step) + already-checked banner.
+          return res.status(200).json(Object.assign({}, prior.result, {
+            ok: true, alreadyChecked: true, lastCheckedAt: checkedAt,
+            fetchedAt: (prior.result.fetchedAt || checkedAt)
+          }));
+        }
+        // No saved status (the first check couldn't reach PSA) — message only.
+        return res.status(200).json({
+          ok: false, alreadyChecked: true, lastCheckedAt: checkedAt,
+          error: "Submission #" + sub + " has already been checked today. Lookups reset daily at 12:00 PM ET — 🧘 patience is the key to happiness."
+        });
       }
-      // No saved status (the first check couldn't reach PSA) — message only.
-      return res.status(200).json({
-        ok: false, alreadyChecked: true, daysRemaining: daysRemaining,
-        error: "Submission #" + sub + " has already been checked within the last 5 days. 🧘 Patience is the key to happiness — please try again in about " + daysRemaining + " day" + (daysRemaining === 1 ? "" : "s") + "."
-      });
     }
   }
 
@@ -136,10 +145,10 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ ok: false, error: "Server is not configured with a PSA token." });
   }
 
-  // Record this lookup now (5-day TTL) BEFORE calling PSA, so the same number
-  // can't hit the PSA API again within 5 days — regardless of the outcome.
+  // Record this lookup for today's period BEFORE calling PSA, so the same number
+  // can't hit the PSA API again until the next 12 PM ET reset — regardless of outcome.
   if (configured()) {
-    try { await cmd(["SET", checkedKey, JSON.stringify({ checkedAt: nowIso }), "EX", 5 * 24 * 3600]); } catch (e) {}
+    try { await cmd(["SET", checkedKey, JSON.stringify({ period: period, checkedAt: nowIso }), "EX", 2 * 24 * 3600]); } catch (e) {}
   }
 
   // NOTE: PSA has two endpoints — GetProgress expects an ORDER number, while
@@ -191,10 +200,10 @@ module.exports = async function handler(req, res) {
     fetchedAt: nowIso
   };
 
-  // Store the status (the last step) with the 5-day record, so a repeat within
-  // the window shows exactly where the submission was.
+  // Store the status (the last step) with today's record, so a repeat before the
+  // next 12 PM ET reset shows exactly where the submission was.
   if (configured()) {
-    try { await cmd(["SET", checkedKey, JSON.stringify({ checkedAt: nowIso, result: result }), "EX", 5 * 24 * 3600]); } catch (e) {}
+    try { await cmd(["SET", checkedKey, JSON.stringify({ period: period, checkedAt: nowIso, result: result }), "EX", 2 * 24 * 3600]); } catch (e) {}
   }
 
   return res.status(200).json(result);
