@@ -27,10 +27,12 @@ function fmtET(iso) {
 }
 
 function renderResult(data) {
-  const TOTAL = data.steps.length;
-  // Show the step the order is currently ON (the in-progress step), not just
-  // the number completed. If everything is done, it's on the final step.
-  const currentStepNum = (data.currentIdx >= 0) ? (data.currentIdx + 1) : TOTAL;
+  // PSA's grading pipeline is a fixed 7-step process — always show progress out
+  // of 7, even when the API returns fewer steps for a given order.
+  const TOTAL = Math.max(7, data.steps.length);
+  // Current step = the in-progress step, or (when all returned steps are done)
+  // how many have been recorded so far.
+  const currentStepNum = (data.currentIdx >= 0) ? (data.currentIdx + 1) : data.steps.length;
   const pct = Math.round((currentStepNum / TOTAL) * 100);
   let html = "";
 
