@@ -126,19 +126,24 @@ module.exports = async function handler(req, res) {
       try { prior = JSON.parse(priorRaw); } catch (e) { prior = {}; }
       const checkedAt = prior.checkedAt || nowIso;
       const elapsedH = (Date.now() - Date.parse(checkedAt)) / 3600000;
-      const hoursRemaining = Math.max(1, Math.ceil(24 - (isNaN(elapsedH) ? 0 : elapsedH)));
-      if (prior.result) {
-        // Show the saved status (their last step) + already-checked banner.
-        return res.status(200).json(Object.assign({}, prior.result, {
-          ok: true, alreadyChecked: true, lastCheckedAt: checkedAt, hoursRemaining: hoursRemaining,
-          fetchedAt: (prior.result.fetchedAt || checkedAt)
-        }));
+      // Only block if the last check was GENUINELY within the last 24 hours
+      // (guards against stale records that linger past their intended window).
+      if (!isNaN(elapsedH) && elapsedH < 24) {
+        const hoursRemaining = Math.max(1, Math.ceil(24 - elapsedH));
+        if (prior.result) {
+          // Show the saved status (their last step) + already-checked banner.
+          return res.status(200).json(Object.assign({}, prior.result, {
+            ok: true, alreadyChecked: true, lastCheckedAt: checkedAt, hoursRemaining: hoursRemaining,
+            fetchedAt: (prior.result.fetchedAt || checkedAt)
+          }));
+        }
+        // No saved status (the first check couldn't reach PSA) — message only.
+        return res.status(200).json({
+          ok: false, alreadyChecked: true, lastCheckedAt: checkedAt, hoursRemaining: hoursRemaining,
+          error: "Submission #" + sub + " has already been checked in the last 24 hours. You can check it again in about " + hoursRemaining + " hour" + (hoursRemaining === 1 ? "" : "s") + " — 🧘 patience is the key to happiness."
+        });
       }
-      // No saved status (the first check couldn't reach PSA) — message only.
-      return res.status(200).json({
-        ok: false, alreadyChecked: true, lastCheckedAt: checkedAt, hoursRemaining: hoursRemaining,
-        error: "Submission #" + sub + " has already been checked in the last 24 hours. You can check it again in about " + hoursRemaining + " hour" + (hoursRemaining === 1 ? "" : "s") + " — 🧘 patience is the key to happiness."
-      });
+      // Stale record (>= 24h old) — fall through and do a fresh lookup.
     }
   }
 
